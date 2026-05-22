@@ -117,7 +117,9 @@ static ImU32 ColorForAction(const int_fast8_t action) {
 		{8, IM_COL32(192, 192, 192, 200) }, 
 		{9, IM_COL32(255, 128, 0, 255)},    
 	};
-	return map.at(action);
+	auto it = map.find(action);
+	if (it != map.end()) return it->second;
+	return IM_COL32(255, 255, 255, 200); // Fallback to prevent std::out_of_range crash
 }
 
 struct TextCallbackData {
@@ -181,6 +183,7 @@ public:
 		last_cycle = m_ActiveCycle;
 
 		int max_cycle = (m_FieldsFrameCount - 1) / 10;
+		if (max_cycle < 0) max_cycle = 0;
 
 		if (!io.WantCaptureKeyboard) { 
 			if (m_ActiveCycle < max_cycle && (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_J))) m_ActiveCycle++;
@@ -195,6 +198,7 @@ public:
 
 		int remaining_fields = m_FieldsFrameCount - (m_ActiveCycle * 10);
 		int fields_in_cycle = std::min(remaining_fields, 11);
+		if (fields_in_cycle < 0) fields_in_cycle = 0;
 
 		for (int i = 0; i < fields_in_cycle; i++) {
 			if (m_Fields[i] == nullptr) continue;
@@ -218,7 +222,7 @@ public:
 				}
 
 				p2p_buffer_param p = {};
-				p.packing = p2p_rgba32_be;
+				p.packing = p2p_rgba32_le; // FIXED: Changed from _be to _le for correct Windows colors
 				p.width = m_FieldsWidth;
 				p.height = m_FieldsHeight;
 				p.dst[0] = imageBuffer;
@@ -262,6 +266,8 @@ public:
 
 		ImGui::Begin("Output");
 		int frames_in_cycle = fields_in_cycle * 4 / 10;
+		if (frames_in_cycle > 4) frames_in_cycle = 4; // Safety clamp
+		
 		if (ImGui::BeginTable("frame table", 4, ImGuiTableFlags_PadOuterX)) {
 			ImGui::TableNextRow();
 			for (int i = 0; i < frames_in_cycle; i++) {
@@ -289,7 +295,7 @@ public:
 					}
 
 					p2p_buffer_param p = {};
-					p.packing = p2p_rgba32_be;
+					p.packing = p2p_rgba32_le; // FIXED: Changed from _be to _le for correct Windows colors
 					p.width = m_FramesWidth;
 					p.height = m_FramesHeight;
 					p.dst[0] = imageBuffer;
@@ -307,8 +313,15 @@ public:
 					} else {
 						int err = 0;
 						m_FieldCount[i] = m_VSAPI->mapGetInt(props, "IVTCDN_Fields", 0, &err);
-						const char* freezeFrameProp = m_VSAPI->mapGetData(props, "IVTCDN_FreezeFrame", 0, &err);
-						m_FreezeFrames[i] = err ? "" : freezeFrameProp;
+						
+						// FIXED: Use mapGetDataSize to prevent reading past the buffer if not null-terminated!
+						int dataSize = m_VSAPI->mapGetDataSize(props, "IVTCDN_FreezeFrame", 0, &err);
+						if (!err && dataSize > 0) {
+							const char* freezeFrameProp = m_VSAPI->mapGetData(props, "IVTCDN_FreezeFrame", 0, &err);
+							m_FreezeFrames[i] = err ? "" : std::string(freezeFrameProp, dataSize);
+						} else {
+							m_FreezeFrames[i] = "";
+						}
 						
 						if (m_VSAPI->mapNumElements(props, "VMetrics") == 2) {
 							const int64_t* vmetrics = m_VSAPI->mapGetIntArray(props, "VMetrics", &err);
